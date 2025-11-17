@@ -1,0 +1,359 @@
+#!/bin/bash
+
+# Colors for better output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# Service names
+SERVICES=("genesis-agent-nats" "genesis-agent-bridge" "genesis-agent-collector")
+
+show_header() {
+    clear
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "${BLUE}      Genesis Agent Service Manager${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo ""
+}
+
+show_service_status() {
+    echo -e "${CYAN}Service Status:${NC}"
+    echo ""
+    
+    for service in "${SERVICES[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            echo -e "  ${GREEN}$service: Running${NC}"
+        else
+            echo -e "  ${RED}$service: Stopped${NC}"
+        fi
+    done
+    echo ""
+}
+
+show_main_menu() {
+    show_header
+    show_service_status
+    
+    echo -e "${YELLOW}Select an option:${NC}"
+    echo ""
+    echo "  1) View NATS Server logs"
+    echo "  2) View Bridge logs"
+    echo "  3) View Collector logs"
+    echo "  4) View all services logs"
+    echo "  5) Service management"
+    echo "  6) Configuration"
+    echo "  7) System info"
+    echo "  0) Exit"
+    echo ""
+    echo -n "Choose option [0-7]: "
+}
+
+view_service_logs() {
+    local service=$1
+    local service_name=$2
+    
+    clear
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "${BLUE}         $service_name Logs${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo ""
+    echo -e "${YELLOW}Options:${NC}"
+    echo "  1) View last 50 lines"
+    echo "  2) View last 100 lines"
+    echo "  3) Follow logs (real-time)"
+    echo "  4) View errors only"
+    echo "  5) View logs since last hour"
+    echo "  0) Back to main menu"
+    echo ""
+    echo -n "Choose option [0-5]: "
+    
+    read log_choice
+    
+    case $log_choice in
+        1)
+            echo ""
+            echo -e "${CYAN}Last 50 lines of $service_name:${NC}"
+            echo ""
+            sudo journalctl -u "$service" -n 50 --no-pager
+            ;;
+        2)
+            echo ""
+            echo -e "${CYAN}Last 100 lines of $service_name:${NC}"
+            echo ""
+            sudo journalctl -u "$service" -n 100 --no-pager
+            ;;
+        3)
+            echo ""
+            echo -e "${CYAN}Following $service_name logs (Press Ctrl+C to stop):${NC}"
+            echo ""
+            sudo journalctl -u "$service" -f
+            ;;
+        4)
+            echo ""
+            echo -e "${CYAN}Errors from $service_name:${NC}"
+            echo ""
+            sudo journalctl -u "$service" -p err --no-pager
+            ;;
+        5)
+            echo ""
+            echo -e "${CYAN}$service_name logs from last hour:${NC}"
+            echo ""
+            sudo journalctl -u "$service" --since "1 hour ago" --no-pager
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}Invalid option!${NC}"
+            sleep 2
+            ;;
+    esac
+    
+    if [ "$log_choice" != "3" ] && [ "$log_choice" != "0" ]; then
+        echo ""
+        echo -e "${YELLOW}Press Enter to continue...${NC}"
+        read
+    fi
+}
+
+service_management() {
+    clear
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "${BLUE}         Service Management${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo ""
+    show_service_status
+    
+    echo -e "${YELLOW}Management Options:${NC}"
+    echo ""
+    echo "  1) Start all services"
+    echo "  2) Stop all services"
+    echo "  3) Restart all services"
+    echo "  4) Start specific service"
+    echo "  5) Stop specific service"
+    echo "  6) Restart specific service"
+    echo "  0) Back to main menu"
+    echo ""
+    echo -n "Choose option [0-6]: "
+    
+    read mgmt_choice
+    
+    case $mgmt_choice in
+        1)
+            echo ""
+            echo -e "${CYAN}Starting all services...${NC}"
+            sudo systemctl start genesis-agent-nats
+            sleep 3
+            sudo systemctl start genesis-agent-bridge
+            sleep 2
+            sudo systemctl start genesis-agent-collector
+            echo -e "${GREEN} Services started${NC}"
+            ;;
+        2)
+            echo ""
+            echo -e "${CYAN}Stopping all services...${NC}"
+            sudo systemctl stop genesis-agent-collector genesis-agent-bridge genesis-agent-nats
+            echo -e "${GREEN} Services stopped${NC}"
+            ;;
+        3)
+            echo ""
+            echo -e "${CYAN}Restarting all services...${NC}"
+            sudo systemctl stop genesis-agent-collector genesis-agent-bridge genesis-agent-nats
+            sleep 2
+            sudo systemctl start genesis-agent-nats
+            sleep 3
+            sudo systemctl start genesis-agent-bridge
+            sleep 2
+            sudo systemctl start genesis-agent-collector
+            echo -e "${GREEN} Services restarted${NC}"
+            ;;
+        4|5|6)
+            echo ""
+            echo -e "${YELLOW}Select service:${NC}"
+            echo "  1) NATS Server"
+            echo "  2) Bridge"
+            echo "  3) Collector"
+            echo -n "Choose service [1-3]: "
+            read service_num
+            
+            case $service_num in
+                1) selected_service="genesis-agent-nats" ;;
+                2) selected_service="genesis-agent-bridge" ;;
+                3) selected_service="genesis-agent-collector" ;;
+                *) echo -e "${RED}Invalid choice!${NC}"; sleep 2; return ;;
+            esac
+            
+            case $mgmt_choice in
+                4) sudo systemctl start "$selected_service"; echo -e "${GREEN}$selected_service started${NC}" ;;
+                5) sudo systemctl stop "$selected_service"; echo -e "${GREEN}$selected_service stopped${NC}" ;;
+                6) sudo systemctl restart "$selected_service"; echo -e "${GREEN}$selected_service restarted${NC}" ;;
+            esac
+            ;;
+        0)
+            return
+            ;;
+        *)
+            echo -e "${RED}Invalid option!${NC}"
+            sleep 2
+            ;;
+    esac
+    
+    if [ "$mgmt_choice" != "0" ]; then
+        echo ""
+        echo -e "${YELLOW}Press Enter to continue...${NC}"
+        read
+    fi
+}
+
+show_configuration() {
+    clear
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "${BLUE}         Configuration${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo ""
+    
+    if [ -f "/etc/genesis_agent/config.env" ]; then
+        echo -e "${CYAN}Current Configuration:${NC}"
+        echo ""
+        cat /etc/genesis_agent/config.env | grep -E "^GENESIS_AGENT_" | while read line; do
+            echo "  $line"
+        done
+        echo ""
+        echo -e "${YELLOW}Options:${NC}"
+        echo "  1) Reconfigure server"
+        echo "  2) Edit configuration file"
+        echo "  0) Back to main menu"
+        echo ""
+        echo -n "Choose option [0-2]: "
+        
+        read config_choice
+        
+        case $config_choice in
+            1)
+                echo ""
+                echo -e "${CYAN}Reconfiguring server...${NC}"
+                sudo /usr/share/genesis_agent/configure-server.sh
+                echo ""
+                echo -e "${YELLOW}Restart services to apply changes? [y/N]:${NC}"
+                read restart_choice
+                if [[ $restart_choice =~ ^[Yy]$ ]]; then
+                    sudo systemctl restart genesis_agent-bridge genesis_agent-collector
+                    echo -e "${GREEN} Services restarted${NC}"
+                fi
+                ;;
+            2)
+                sudo nano /etc/genesis_agent/config.env
+                ;;
+            0)
+                return
+                ;;
+        esac
+    else
+        echo -e "${RED}Configuration file not found!${NC}"
+        echo ""
+        echo "Run: sudo /usr/share/genesis_agent/configure-server.sh"
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Press Enter to continue...${NC}"
+    read
+}
+
+show_system_info() {
+    clear
+    echo -e "${BLUE}=========================================${NC}"
+    echo -e "${BLUE}         System Information${NC}"
+    echo -e "${BLUE}=========================================${NC}"
+    echo ""
+    
+    echo -e "${CYAN}Package Information:${NC}"
+    dpkg -l | grep genesis_agent | awk '{print "  Package: " $2 "\n  Version: " $3 "\n  Status: " $1}'
+    echo ""
+    
+    echo -e "${CYAN}Database:${NC}"
+    if [ -f "/var/lib/genesis_agent/monitoring.db" ]; then
+        echo " Database exists"
+        echo "  Location: /var/lib/genesis_agent/monitoring.db"
+        
+        db_size=$(du -h /var/lib/genesis_agent/monitoring.db | cut -f1)
+        echo "  Size: $db_size"
+        
+        agent_count=$(sudo sqlite3 /var/lib/genesis_agent/monitoring.db "SELECT COUNT(*) FROM agents;" 2>/dev/null || echo "0")
+        token_count=$(sudo sqlite3 /var/lib/genesis_agent/monitoring.db "SELECT COUNT(*) FROM tokens;" 2>/dev/null || echo "0")
+        
+        echo "  Agents: $agent_count"
+        echo "  Tokens: $token_count"
+    else
+        echo "Database not found"
+    fi
+    echo ""
+    
+    echo -e "${CYAN}NATS Port:${NC}"
+    if sudo ss -tulpn | grep -q ":4222"; then
+        echo "NATS listening on port 4222"
+    else
+        echo "NATS not listening on port 4222"
+    fi
+    echo ""
+    
+    echo -e "${CYAN}Python Scripts:${NC}"
+    if [ -f "/var/lib/genesis_agent/agent_collector/agent_data.py" ]; then
+        echo "Python scripts installed"
+    else
+        echo "Python scripts missing"
+    fi
+    echo ""
+    
+    echo -e "${YELLOW}Press Enter to continue...${NC}"
+    read
+}
+
+# Main loop
+while true; do
+    show_main_menu
+    read choice
+    
+    case $choice in
+        1)
+            view_service_logs "genesis-agent-nats" "NATS Server"
+            ;;
+        2)
+            view_service_logs "genesis-agent-bridge" "Bridge"
+            ;;
+        3)
+            view_service_logs "genesis-agent-collector" "Collector"
+            ;;
+        4)
+            clear
+            echo -e "${BLUE}=========================================${NC}"
+            echo -e "${BLUE}         All Services Logs${NC}"
+            echo -e "${BLUE}=========================================${NC}"
+            echo ""
+            echo -e "${CYAN}Following all services (Press Ctrl+C to stop):${NC}"
+            echo ""
+            sudo journalctl -u genesis-agent-nats -u genesis-agent-bridge -u genesis-agent-collector -f
+            ;;
+        5)
+            service_management
+            ;;
+        6)
+            show_configuration
+            ;;
+        7)
+            show_system_info
+            ;;
+        0)
+            clear
+            echo -e "${GREEN}Thank you for using Genesis Agent Service Manager!${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}Invalid option! Please choose 0-7.${NC}"
+            sleep 2
+            ;;
+    esac
+done

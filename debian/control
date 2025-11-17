@@ -1,0 +1,12 @@
+Source: genesis-agent
+Section: admin
+Priority: optional
+Maintainer: Your Name <you@example.com>
+Build-Depends: debhelper-compat (= 13), cargo, python3, python3-venv
+Standards-Version: 4.6.0
+
+Package: genesis-agent
+Architecture: amd64
+Depends: systemd, adduser, dmidecode, lshw, util-linux, iproute2, coreutils, jq, curl, wget
+Description: Genesis Agent monitoring system
+ A Rust + Python-based monitoring system that uses NATS for communication.

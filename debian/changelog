@@ -1,0 +1,8 @@
+genesis-agent (0.1.0-1) stable; urgency=medium
+
+  * Initial release of Genesis Agent
+  * Includes models_database, agent_bridge, and agent_collector
+  * Embeds Python 3.10 runtime via uv
+  * Provides systemd services for nats, bridge, and collector
+
+ -- Shashank C J <shashank@example.com>  Wed, 13 Nov 2025 12:00:00 +0530

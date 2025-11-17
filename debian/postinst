@@ -1,0 +1,678 @@
+#!/bin/bash
+set -e
+
+export PATH=$PATH:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+
+
+echo "Running Genesis Agent post-installation steps..."
+
+
+
+echo "[+] Checking SQLCipher installation..."
+
+INSTALLED_VERSION=$(sqlcipher --version 2>/dev/null | awk '{print $1}' | head -n1)
+
+if [[ -z "$INSTALLED_VERSION" || "$(printf '%s\n' "4.5.0" "$INSTALLED_VERSION" | sort -V | head -n1)" != "4.5.0" ]]; then
+    echo "[i] SQLCipher missing or outdated (found: ${INSTALLED_VERSION:-none}) — installing v4.5.0 quietly..."
+
+    {
+        cd /tmp || exit 1
+        wget -q https://github.com/sqlcipher/sqlcipher/archive/refs/tags/v4.5.0.tar.gz -O v4.5.0.tar.gz
+        tar -xf v4.5.0.tar.gz
+        cd sqlcipher-4.5.0 || exit 1
+
+        ./configure --prefix=/usr/local --enable-tempstore=yes CFLAGS="-DSQLITE_HAS_CODEC" LDFLAGS="-lcrypto" >/dev/null 2>&1
+        make -j"$(nproc)" >/dev/null 2>&1
+        make install >/dev/null 2>&1
+
+        echo "/usr/local/lib" > /etc/ld.so.conf.d/local-lib.conf
+        ldconfig >/dev/null 2>&1
+    } || {
+        echo "[✗] SQLCipher build failed. Check /var/log/genesis_agent/sqlcipher_build.log for details."
+        exit 1
+    }
+
+    echo "[✓] SQLCipher v4.5.0 installed successfully."
+else
+    echo "[✓] SQLCipher $INSTALLED_VERSION already present — skipping build."
+fi
+
+
+# ==========================================================
+# Install NATS Server if not present
+# ==========================================================
+if ! command -v nats-server >/dev/null; then
+    echo "[+] Installing NATS Server v2.10.14..."
+    cd /tmp
+    curl -L https://github.com/nats-io/nats-server/releases/download/v2.10.14/nats-server-v2.10.14-linux-amd64.tar.gz -o nats-server.tar.gz
+    tar -xvzf nats-server.tar.gz
+    mv nats-server-v2.10.14-linux-amd64/nats-server /usr/local/bin/
+    chmod +x /usr/local/bin/nats-server
+    rm -rf nats-server-v2.10.14-linux-amd64 nats-server.tar.gz
+    echo "[✓] NATS Server installed successfully."
+else
+    echo "[✓] NATS Server already installed."
+fi
+
+# ==========================================================
+# Install NSC (NATS CLI) if not present
+# ==========================================================
+if ! command -v nsc >/dev/null; then
+    echo "[+] Installing NSC (NATS CLI)..."
+    cd /tmp
+    latest_url=$(
+      curl -s https://api.github.com/repos/nats-io/nsc/releases/latest \
+      | grep "browser_download_url" | grep "linux-amd64.zip" | cut -d '"' -f 4 | head -n 1
+    )
+    if [ -z "$latest_url" ]; then
+        latest_url=https://github.com/nats-io/nsc/releases/download/v2.12.0/nsc-linux-amd64.zip
+    fi
+    wget -O nsc.zip "$latest_url"
+    unzip -o nsc.zip -d nsc_bin
+    mv nsc_bin/nsc /usr/local/bin/
+    chmod +x /usr/local/bin/nsc
+    rm -rf nsc.zip nsc_bin
+    echo "[✓] NSC installed successfully."
+else
+    echo "[✓] NSC already installed."
+fi
+
+
+
+# =======================================8===================
+# 1. Create system user and group
+# ==========================================================
+if ! getent group genagent > /dev/null 2>&1; then
+    groupadd --system genagent
+fi
+
+if ! getent passwd genagent > /dev/null 2>&1; then
+    useradd --system --group genagent --home /var/lib/genesis_agent --shell /usr/sbin/nologin genagent
+fi
+
+# ==========================================================
+# 2. Configure sudo permissions for genagent
+# ==========================================================
+cat > /etc/sudoers.d/genagent << 'SUDOEOF'
+genagent ALL=(ALL) NOPASSWD: \
+    /usr/sbin/dmidecode, \
+    /usr/sbin/blkid, \
+    /usr/bin/lshw, \
+    /sbin/ip, \
+    /usr/bin/lsblk, \
+    /bin/cat /etc/os-release, \
+    /bin/cat /etc/resolv.conf
+SUDOEOF
+chmod 440 /etc/sudoers.d/genagent
+
+# ==========================================================
+# 3. Create required directories
+# ==========================================================
+NATS_DIR="/var/lib/genesis_agent/nats"
+NATS_CONFIG_DIR="$NATS_DIR/nats_config"
+JETSTREAM_DIR="$NATS_DIR/jetstream"
+CERT_DIR="$NATS_CONFIG_DIR/certificate"
+JWT_STORE="$NATS_DIR/nsc_creds/jwt_store"
+
+mkdir -p \
+  /var/lib/genesis_agent/models_database \
+  "$NATS_CONFIG_DIR" \
+  "$JETSTREAM_DIR" \
+  "$CERT_DIR" \
+  "$JWT_STORE" \
+  /var/lib/genesis_agent/agent_collector \
+  /var/log/genesis_agent \
+  /etc/genesis_agent
+
+# ==========================================================
+# 4. Set permissions and ownership
+# ==========================================================
+# Allow genagent group to access /etc/genesis_agent directory
+chown root:genagent /etc/genesis_agent
+chmod 750 /etc/genesis_agent
+
+chmod 750 /var/lib/genesis_agent/models_database
+chmod 750 "$NATS_DIR" "$NATS_CONFIG_DIR" "$JETSTREAM_DIR"
+chmod 755 /var/lib/genesis_agent/agent_collector
+chmod 750 /var/log/genesis_agent
+
+# Set ownership for main Agent data directories to genagent user and group
+chown -R genagent:genagent /var/lib/genesis_agent
+chown -R genagent:genagent /var/log/genesis_agent
+
+# Set ownership and permissions for environment files used by systemd service
+chown genagent:genagent /etc/genesis_agent/config.env 2>/dev/null || true
+chown genagent:genagent /etc/genesis_agent/secure.env 2>/dev/null || true
+
+chmod 640 /etc/genesis_agent/config.env 2>/dev/null || true
+chmod 600 /etc/genesis_agent/secure.env 2>/dev/null || true
+
+
+# ==========================================================
+# 5. Generate SQLCipher encryption key
+# ==========================================================
+KEY_FILE="/etc/genesis_agent/secure.env"
+if [ ! -f "$KEY_FILE" ]; then
+    ENC_KEY=$(head -c32 /dev/urandom | base64 | tr -d '=+/')
+    echo "GENESIS_AGENT_DB_KEY=${ENC_KEY}" > "$KEY_FILE"
+    chmod 600 "$KEY_FILE"
+    chown root:root "$KEY_FILE"
+    echo "✓ Encryption key generated."
+else
+    echo "✓ Encryption key already exists."
+fi
+
+# ==========================================================
+# 5. Setup Embedded Python 3.10 Virtual Environment (Final)
+# ==========================================================
+
+echo "[+] Setting up embedded Python 3.10 virtual environment..."
+
+# Paths
+EMBED_PY_DIR="/usr/share/genesis_agent/python310"
+PY_BIN="$EMBED_PY_DIR/bin/python3.10"
+PY_VENV_DIR="/opt/genesis_agent/venv"
+REQ_FILE="/usr/share/genesis_agent/requirements.txt"
+
+# --- Step 0: Verify embedded Python exists ---
+if [ ! -x "$PY_BIN" ]; then
+    echo "Embedded Python 3.10 runtime missing! Check your package build."
+    exit 1
+fi
+
+# --- Step 1: Create clean venv if not exists ---
+if [ ! -d "$PY_VENV_DIR" ]; then
+    echo "[+] Creating isolated venv from embedded Python..."
+    "$PY_BIN" -m venv "$PY_VENV_DIR"
+    echo "[✓] Virtual environment created at $PY_VENV_DIR"
+else
+    echo "[✓] Virtual environment already exists."
+fi
+
+# --- Step 2: Ensure pip is available ---
+if [ ! -x "$PY_VENV_DIR/bin/pip" ]; then
+    echo "[+] Bootstrapping pip into venv..."
+    "$PY_VENV_DIR/bin/python" -m ensurepip --upgrade
+fi
+
+# --- Step 3: Install dependencies ---
+echo "[+] Installing Python dependencies..."
+if [ -f "$REQ_FILE" ]; then
+    "$PY_VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel --break-system-packages >/dev/null 2>&1
+    "$PY_VENV_DIR/bin/python" -m pip install -r "$REQ_FILE" --break-system-packages >/dev/null 2>&1
+else
+    "$PY_VENV_DIR/bin/python" -m pip install psutil sqlalchemy --break-system-packages >/dev/null 2>&1
+fi
+
+# --- Step 4: Fix permissions ---
+chown -R genagent:genagent "$PY_VENV_DIR"
+chmod -R 755 "$PY_VENV_DIR"
+
+# --- Step 5: Register runtime library path (if not already added) ---
+if ! grep -q "/usr/share/genesis_agent/python310/lib" /etc/environment 2>/dev/null; then
+    echo "LD_LIBRARY_PATH=/usr/share/genesis_agent/python310/lib:/opt/genesis_agent/venv/lib:/usr/local/lib" >> /etc/environment
+fi
+
+echo "[✓] Embedded Python 3.10 venv ready and dependencies installed."
+
+
+
+# ==========================================================
+# 6. Generate NATS credentials, accounts, and certificates
+# ==========================================================
+echo "[+] Generating NATS credentials and certificates..."
+
+if [ -d "$NATS_DIR/nsc_creds/GenesisOperator" ]; then
+    echo "[✓] NATS already initialized — skipping key generation."
+    exit 0
+fi
+
+HOSTNAME=$(hostname)
+SYS_UUID=$(sudo dmidecode -s system-uuid 2>/dev/null || cat /etc/machine-id || uuidgen)
+SYS_UUID=${SYS_UUID:-"unknown"}
+
+mkdir -p "$NATS_DIR/nsc_creds" "$NATS_CONFIG_DIR/certificate"
+
+CERT_DIR="$NATS_CONFIG_DIR/certificate"
+
+# ==========================================================
+# Create CA certificate
+# ==========================================================
+if [ ! -f "$CERT_DIR/ca-cert.pem" ]; then
+    echo "[+] Creating CA certificate..."
+    CNF_FILE="/tmp/ca_ext.$$"
+    cat > "$CNF_FILE" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_ca
+prompt = no
+[req_distinguished_name]
+CN = GenesisAgentCA
+[v3_ca]
+basicConstraints = critical,CA:TRUE
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+EOF
+    openssl req -x509 -newkey rsa:2048 -nodes -days 730 \
+        -keyout "$CERT_DIR/ca-cert.key" \
+        -out "$CERT_DIR/ca-cert.pem" \
+        -config "$CNF_FILE" >/dev/null 2>&1
+    rm -f "$CNF_FILE"
+    echo "[✓] Created CA certificate."
+fi
+
+# ==========================================================
+# Create Bridge certificate with SANs
+# ==========================================================
+if [ ! -f "$CERT_DIR/bridge-cert.pem" ]; then
+    echo "[+] Creating Bridge certificate..."
+    CNF_FILE="/tmp/bridge_ext.$$"
+    cat > "$CNF_FILE" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+prompt = no
+[req_distinguished_name]
+CN = bridge.$HOSTNAME
+[ext]
+subjectAltName = @alt_names
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+[alt_names]
+DNS.1 = $HOSTNAME
+DNS.2 = bridge.$HOSTNAME
+DNS.3 = localhost
+IP.1 = 127.0.0.1
+EOF
+    openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "$CERT_DIR/bridge-key.pem" \
+        -out "$CERT_DIR/bridge.csr" \
+        -config "$CNF_FILE" >/dev/null 2>&1
+    openssl x509 -req -in "$CERT_DIR/bridge.csr" \
+        -CA "$CERT_DIR/ca-cert.pem" -CAkey "$CERT_DIR/ca-cert.key" -CAcreateserial \
+        -out "$CERT_DIR/bridge-cert.pem" -days 730 -sha256 \
+        -extfile "$CNF_FILE" -extensions ext >/dev/null 2>&1
+    rm -f "$CNF_FILE"
+    echo "[✓] Bridge certificate created with SANs."
+fi
+
+# ==========================================================
+# Create Collector certificate with SANs
+# ==========================================================
+if [ ! -f "$CERT_DIR/collector-cert.pem" ]; then
+    echo "[+] Creating Collector certificate..."
+    CNF_FILE="/tmp/collector_ext.$$"
+    cat > "$CNF_FILE" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+prompt = no
+[req_distinguished_name]
+CN = collector.$HOSTNAME
+[ext]
+subjectAltName = @alt_names
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth, clientAuth
+[alt_names]
+DNS.1 = $HOSTNAME
+DNS.2 = collector.$HOSTNAME
+DNS.3 = localhost
+IP.1 = 127.0.0.1
+EOF
+    openssl req -new -newkey rsa:2048 -nodes \
+        -keyout "$CERT_DIR/collector-key.pem" \
+        -out "$CERT_DIR/collector.csr" \
+        -config "$CNF_FILE" >/dev/null 2>&1
+    openssl x509 -req -in "$CERT_DIR/collector.csr" \
+        -CA "$CERT_DIR/ca-cert.pem" -CAkey "$CERT_DIR/ca-cert.key" -CAcreateserial \
+        -out "$CERT_DIR/collector-cert.pem" -days 730 -sha256 \
+        -extfile "$CNF_FILE" -extensions ext >/dev/null 2>&1
+    rm -f "$CNF_FILE"
+    echo "[✓] Collector certificate created with SANs."
+fi
+
+
+# --- Initialize NSC workspace ---
+export NSC_HOME="$NATS_DIR/nsc_creds"
+if [ ! -d "$NSC_HOME" ]; then
+    echo "[+] Initializing NSC workspace..."
+    /usr/local/bin/nsc init --name genesis_agent --dir "$NSC_HOME" >/dev/null 2>&1 || true
+fi
+
+# Operator / Accounts / Users
+OPERATOR_NAME="GenesisOperator"
+ACCOUNT_NAME="BridgeAccount"
+USER_NAME="BridgeUser-${SYS_UUID}"
+COLLECTOR_USER="CollectorUser-${SYS_UUID}"
+
+/usr/local/bin/nsc init --name genesis_agent --dir "$NSC_HOME" >/dev/null 2>&1 || true
+/usr/local/bin/nsc add operator --name $OPERATOR_NAME >/dev/null 2>&1 || true
+/usr/local/bin/nsc add account --name $ACCOUNT_NAME >/dev/null 2>&1 || true
+
+# Bridge user creds
+/usr/local/bin/nsc add user --account $ACCOUNT_NAME --name $USER_NAME >/dev/null 2>&1 || true
+/usr/local/bin/nsc generate creds --account $ACCOUNT_NAME --name $USER_NAME \
+    > "$NATS_DIR/nsc_creds/BridgeUser.creds"
+
+# Collector user creds
+/usr/local/bin/nsc add user --account $ACCOUNT_NAME --name $COLLECTOR_USER >/dev/null 2>&1 || true
+/usr/local/bin/nsc generate creds --account $ACCOUNT_NAME --name $COLLECTOR_USER \
+    > "$NATS_DIR/nsc_creds/CollectorUser.creds"
+
+
+# ==========================================================
+# Extract clean .nk keys from .creds files (universal for SU, SA, SO, etc.)
+# ==========================================================
+echo "[+] Extracting clean .nk keys from .creds files..."
+
+for creds_file in "$NATS_DIR/nsc_creds/"*.creds; do
+    [ -f "$creds_file" ] || continue
+    nk_file="${creds_file%.creds}.nk"
+
+    # Extract any NKEY seed (Operator/User/Account/Server/Cluster)
+    awk '/-----BEGIN .*NKEY SEED-----/{flag=1;next}/-----END .*NKEY SEED-----/{flag=0}flag' "$creds_file" \
+        | tr -d '\r\n ' > "$nk_file"
+
+    # Validate format — must start with 'S' and length ~58 chars
+    if grep -q '^S[A-Z]' "$nk_file" && [ $(wc -c < "$nk_file") -ge 55 ] && [ $(wc -c < "$nk_file") -le 65 ]; then
+        echo "[✓] Extracted NKEY seed for $(basename "$nk_file")"
+    else
+        echo "[!] Warning: $(basename "$nk_file") may not contain a valid seed!"
+    fi
+
+    chmod 600 "$nk_file"
+    chown genagent:genagent "$nk_file"
+done
+
+# -----------------------------
+# ADD: Generate all missing JWT and NK files properly + clean symlinks
+# -----------------------------
+OPERATOR_DIR="$NATS_DIR/nsc_creds/GenesisOperator"
+ACCOUNT_DIR="$OPERATOR_DIR/accounts/BridgeAccount"
+USER_DIR="$ACCOUNT_DIR/users"
+# KEY_DIR="$NATS_DIR/nsc_creds/keys"
+
+# mkdir -p "$USER_DIR" "$KEY_DIR"
+
+# --- Generate JWTs if missing ---
+if [ ! -f "$OPERATOR_DIR/GenesisOperator.jwt" ]; then
+    echo "[+] Generating operator JWT..."
+    /usr/local/bin/nsc generate jwt --operator GenesisOperator \
+        --output-file "$OPERATOR_DIR/GenesisOperator.jwt" >/dev/null 2>&1 || true
+fi
+
+if [ ! -f "$ACCOUNT_DIR/BridgeAccount.jwt" ]; then
+    echo "[+] Generating account JWT..."
+    /usr/local/bin/nsc generate jwt --account BridgeAccount \
+        --output-file "$ACCOUNT_DIR/BridgeAccount.jwt" >/dev/null 2>&1 || true
+fi
+
+# Bridge & Collector User JWTs
+for user in "$USER_NAME" "$COLLECTOR_USER"; do
+    USER_JWT="$USER_DIR/${user}.jwt"
+    if [ ! -f "$USER_JWT" ]; then
+        echo "[+] Generating JWT for user: $user"
+        /usr/local/bin/nsc generate jwt --account BridgeAccount --name "$user" \
+            --output-file "$USER_JWT" >/dev/null 2>&1 || true
+    fi
+done
+
+
+# mkdir -p "$NATS_DIR/nsc_creds/keys/O"
+# mkdir -p "$NATS_DIR/nsc_creds/keys/A"
+# mkdir -p "$NATS_DIR/nsc_creds/keys/U"
+
+# echo "[+] Ensuring .nk key files exist..."
+
+# # Ensure NSC environment context is properly active
+# export NSC_HOME="$NATS_DIR/nsc_creds"
+# /usr/local/bin/nsc env --operator "$OPERATOR_NAME" --account "$ACCOUNT_NAME" >/dev/null 2>&1
+
+# # Regenerate and persist operator, account, and user keys if missing
+# if ! find "$NATS_DIR/nsc_creds/keys/O" -type f -name "*.nk" | grep -q .; then
+#     echo "[+] Creating operator key..."
+#     /usr/local/bin/nsc edit operator --name "$OPERATOR_NAME" --generate-key >/dev/null 2>&1 || true
+# fi
+
+# if ! find "$NATS_DIR/nsc_creds/keys/A" -type f -name "*.nk" | grep -q .; then
+#     echo "[+] Creating account key..."
+#     /usr/local/bin/nsc edit account --name "$ACCOUNT_NAME" --generate-key >/dev/null 2>&1 || true
+# fi
+
+# if ! find "$NATS_DIR/nsc_creds/keys/U" -type f -iname "U*.nk" | grep -i bridge | grep -q .; then
+#     echo "[+] Creating BridgeUser.nk..."
+#     /usr/local/bin/nsc edit user --account "$ACCOUNT_NAME" --name "$USER_NAME" --generate-key >/dev/null 2>&1 || true
+# fi
+
+# if ! find "$NATS_DIR/nsc_creds/keys/U" -type f -iname "U*.nk" | grep -i collector | grep -q .; then
+#     echo "[+] Creating CollectorUser.nk..."
+#     /usr/local/bin/nsc edit user --account "$ACCOUNT_NAME" --name "$COLLECTOR_USER" --generate-key >/dev/null 2>&1 || true
+# fi
+
+# --- Create symlinks for JWTs and NKs ---
+echo "[+] Creating clean symlinks for .jwt and .nk files..."
+
+# Clean .jwt symlinks (BridgeUser.jwt and CollectorUser.jwt)
+BRIDGE_JWT_SRC=$(find "$USER_DIR" -type f -name "BridgeUser-*.jwt" | head -n 1)
+COLLECTOR_JWT_SRC=$(find "$USER_DIR" -type f -name "CollectorUser-*.jwt" | head -n 1)
+
+if [ -n "$BRIDGE_JWT_SRC" ]; then
+    ln -sf "$BRIDGE_JWT_SRC" "$NATS_DIR/nsc_creds/BridgeUser.jwt"
+fi
+if [ -n "$COLLECTOR_JWT_SRC" ]; then
+    ln -sf "$COLLECTOR_JWT_SRC" "$NATS_DIR/nsc_creds/CollectorUser.jwt"
+fi
+
+# # --- Create clean .nk symlinks ---
+# KEY_DIR="$NATS_DIR/nsc_creds/keys"
+
+# BRIDGE_NK_SRC=$(find "$KEY_DIR" -type f -iname "U*.nk" | grep -i bridge | head -n 1)
+# COLLECTOR_NK_SRC=$(find "$KEY_DIR" -type f -iname "U*.nk" | grep -i collector | head -n 1)
+
+# if [ -n "$BRIDGE_NK_SRC" ]; then
+#         ln -sf "$BRIDGE_NK_SRC" "$NATS_DIR/nsc_creds/BridgeUser.nk"
+#         echo "[✓] BridgeUser.nk symlink created."
+#     else
+#     echo "[!] BridgeUser.nk not found."
+# fi
+
+# if [ -n "$COLLECTOR_NK_SRC" ]; then
+#         ln -sf "$COLLECTOR_NK_SRC" "$NATS_DIR/nsc_creds/CollectorUser.nk"
+#         echo "[✓] CollectorUser.nk symlink created."
+#     else
+#     echo "[!] CollectorUser.nk not found."
+# fi
+
+chmod 600 "$NATS_DIR/nsc_creds/"*.nk 2>/dev/null || true
+chown -R genagent:genagent "$NATS_DIR/nsc_creds" || true
+
+echo "[✓] All .nk key files verified and linked successfully."
+
+# --- Generate NATS server configuration ---
+rm -f "$NATS_DIR/nats-server.conf"
+if /usr/local/bin/nsc generate nats-server-config --help 2>&1 | grep -q -- "--sys-account"; then
+    /usr/local/bin/nsc generate nats-server-config --sys-account $ACCOUNT_NAME > "$NATS_DIR/nats-server.conf"
+elif /usr/local/bin/nsc generate config --help 2>&1 | grep -q -- "--sys-account"; then
+    /usr/local/bin/nsc generate config --mem-resolver --sys-account $ACCOUNT_NAME \
+        --config-file "$NATS_DIR/nats-server.conf"
+elif /usr/local/bin/nsc generate config --help 2>&1 | grep -q -- "--account"; then
+    /usr/local/bin/nsc generate config --mem-resolver --account $ACCOUNT_NAME \
+        --config-file "$NATS_DIR/nats-server.conf"
+else
+    /usr/local/bin/nsc generate config --mem-resolver --config-file "$NATS_DIR/nats-server.conf"
+fi
+
+/usr/local/bin/nsc list accounts > "$NATS_DIR/nsc_creds/accounts.list" 2>/dev/null || true
+/usr/local/bin/nsc list users > "$NATS_DIR/nsc_creds/users.list" 2>/dev/null || true
+
+echo "[✓] NATS credentials, JWTs, and NK files generated successfully."
+
+
+# Permissions
+chown -R genagent:genagent "$NATS_DIR"
+chmod 700 "$JWT_STORE"
+chmod 600 "$CERT_DIR"/*.key "$NATS_DIR"/nsc_creds/*.creds 2>/dev/null || true
+chmod 644 "$CERT_DIR"/*.crt "$CERT_DIR"/*.pem "$NATS_DIR"/nsc_creds/*.jwt 2>/dev/null || true
+
+
+if [ -f "/usr/share/genesis_agent/python-agent-scripts.tar.gz" ]; then
+    mkdir -p /var/lib/genesis_agent/agent_collector
+    tar xzf /usr/share/genesis_agent/python-agent-scripts.tar.gz -C /var/lib/genesis_agent/agent_collector
+    chmod 644 /var/lib/genesis_agent/agent_collector/*.py
+fi
+
+# ==========================================================
+# 7. Apply correct ownership and permissions for NATS files
+# ==========================================================
+chown -R genagent:genagent "$NATS_DIR"
+chmod 700 "$JWT_STORE"
+chmod 600 "$NATS_DIR"/nsc_creds/*.jwt 2>/dev/null || true
+chmod 600 "$NATS_DIR"/nsc_creds/*.nk 2>/dev/null || true
+chmod 600 "$NATS_DIR"/nsc_creds/*.creds 2>/dev/null || true
+chmod 644 "$CERT_DIR"/*.pem 2>/dev/null || true
+
+
+
+
+# ==========================================================
+# 8. Generate nats-server.conf from template (with proper env)
+# ==========================================================
+NATS_TEMPLATE="/usr/share/genesis_agent/nats.conf.template"
+CONFIG_OUT="$NATS_DIR/nats-server.conf"
+OPERATOR_JWT_PATH="$NATS_DIR/nsc_creds/GenesisOperator/GenesisOperator.jwt"
+
+if [ -f "$NATS_TEMPLATE" ]; then
+    echo "[+] Generating nats-server.conf from template..."
+
+    # Ensure NSC environment points to correct store (for NSC v2.12)
+    export NSC_HOME="$NATS_DIR/nsc_creds"
+    export XDG_CONFIG_HOME="$NATS_DIR/nsc_creds"
+    export XDG_DATA_HOME="$NATS_DIR/nsc_creds"
+
+    # Build config from template
+    sed \
+      -e "s|{{HOSTNAME}}|$(hostname)|g" \
+      -e "s|{{OPERATOR_JWT_PATH}}|$OPERATOR_JWT_PATH|g" \
+      -e "s|{{JWT_STORE_PATH}}|$JWT_STORE|g" \
+      -e "s|{{JETSTREAM_PATH}}|$JETSTREAM_DIR|g" \
+      -e "s|{{CERT_PATH}}|$CERT_DIR|g" \
+      "$NATS_TEMPLATE" > "$CONFIG_OUT"
+
+    # Load correct NSC environment
+    /usr/local/bin/nsc env --operator GenesisOperator --account BridgeAccount >/dev/null 2>&1
+
+    # ==========================================================
+    #  Fix system_account key dynamically (final version)
+    # ==========================================================
+    echo "[+] Determining correct system_account public key..."
+
+    export NSC_HOME="$NATS_DIR/nsc_creds"
+    export XDG_CONFIG_HOME="$NATS_DIR/nsc_creds"
+    export XDG_DATA_HOME="$NATS_DIR/nsc_creds"
+
+    # Step 1: Try normal NSC JSON query
+    SYS_PUB_KEY=$(sudo -u genagent env \
+        NSC_HOME="$NATS_DIR/nsc_creds" \
+        XDG_CONFIG_HOME="$NATS_DIR/nsc_creds" \
+        XDG_DATA_HOME="$NATS_DIR/nsc_creds" \
+        /usr/local/bin/nsc list accounts --json 2>/dev/null | jq -r '.[] | select(.name=="BridgeAccount") | .public_key')
+
+    # Step 2: Fallback — decode BridgeAccount.jwt directly if NSC fails
+    if [ -z "$SYS_PUB_KEY" ] && [ -f "$NATS_DIR/nsc_creds/GenesisOperator/accounts/BridgeAccount/BridgeAccount.jwt" ]; then
+        SYS_PUB_KEY=$(cut -d'.' -f2 "$NATS_DIR/nsc_creds/GenesisOperator/accounts/BridgeAccount/BridgeAccount.jwt" \
+            | base64 -d 2>/dev/null | jq -r '.sub // .issuer // .nats.account // empty')
+    fi
+
+    # Step 3: Apply correct key to config
+    if [ -n "$SYS_PUB_KEY" ] && [[ "$SYS_PUB_KEY" == A* ]]; then
+        echo "Found BridgeAccount public key"
+        sed -i "s|^system_account:.*|system_account: $SYS_PUB_KEY|" "$CONFIG_OUT"
+        echo "Updated system_account in nats-server.conf"
+    else
+        echo "Could not determine system_account key — leaving default SYS"
+    fi
+
+
+    chown genagent:genagent "$CONFIG_OUT"
+    chmod 640 "$CONFIG_OUT"
+    echo "✓ nats-server.conf generated successfully."
+else
+    echo "⚠ NATS config template not found — skipping config generation."
+fi
+
+
+# ==========================================================
+# 9. Create symlink for BridgeUser creds
+# ==========================================================
+if [ -f "$NATS_DIR/nsc_creds/BridgeUser.creds" ]; then
+    ln -sf "$NATS_DIR/nsc_creds/BridgeUser.creds" "$NATS_DIR/nats.creds"
+fi
+
+# ==========================================================
+# 10. Initialize config if missing
+# ==========================================================
+if [ ! -f "/etc/genesis_agent/config.env" ]; then
+    if [ -x /usr/share/genesis_agent/configure-server.sh ]; then
+        /usr/share/genesis_agent/configure-server.sh
+    fi
+fi
+
+chown genagent:genagent /etc/genesis_agent/config.env /etc/genesis_agent/secure.env 2>/dev/null || true
+chmod 644 /etc/genesis_agent/config.env 2>/dev/null || true
+chmod 600 /etc/genesis_agent/secure.env 2>/dev/null || true
+
+# ==========================================================
+# 11. Initialize database (SQLCipher)
+# ==========================================================
+DB_PATH="/var/lib/genesis_agent/monitoring.db"
+export GENESIS_AGENT_DB_PATH="$DB_PATH"
+
+echo "[+] Initializing SQLCipher database at $DB_PATH ..."
+
+if [ -x /usr/bin/models_database ]; then
+    # Run as genagent so it uses correct permissions and key
+    sudo -u genagent env LD_LIBRARY_PATH=/usr/local/lib /usr/bin/models_database --init-db
+    INIT_STATUS=$?
+
+    if [ $INIT_STATUS -ne 0 ]; then
+        echo "Database initialization failed (exit code $INIT_STATUS)"
+        exit 1
+    fi
+
+    chown genagent:genagent "$DB_PATH" 2>/dev/null || true
+    chmod 664 "$DB_PATH" 2>/dev/null || true
+    echo "✓ Database initialized successfully."
+else
+    echo "⚠ models_database binary not found — skipping database init."
+fi
+
+
+# ==========================================================
+# 12. Reload systemd and start agent services
+# ==========================================================
+systemctl daemon-reload >/dev/null 2>&1 || true
+systemctl enable genesis-agent-nats.service genesis-agent-bridge.service genesis-agent-collector.service >/dev/null 2>&1 || true
+
+echo " Starting genesis-agent-nats..."
+systemctl restart genesis-agent-nats.service || true
+sleep 5
+
+echo "Starting genesis-agent-bridge..."
+systemctl restart genesis-agent-bridge.service || true
+sleep 2
+
+echo "Starting genesis-agent-collector..."
+systemctl restart genesis-agent-collector.service || true
+
+# ==========================================================
+# 13. Verify service statuses
+# ==========================================================
+for svc in genesis-agent-nats genesis-agent-bridge genesis-agent-collector; do
+    if systemctl is-active --quiet "$svc"; then
+        echo "✓ $svc started successfully."
+    else
+        echo "⚠ $svc failed — check logs with: sudo journalctl -u $svc -xe"
+    fi
+done
+
+echo " Genesis Agent Monitoring System post-installation completed."
+exit 0

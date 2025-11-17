@@ -1,0 +1,30 @@
+listen: "0.0.0.0:4222"
+
+operator: "{{OPERATOR_JWT_PATH}}"
+
+system_account: SYS
+
+resolver {
+  type: full
+  dir: "{{JWT_STORE_PATH}}"
+
+  interval: "30s"
+}
+
+jetstream {
+  store_dir: "{{JETSTREAM_PATH}}"
+  max_mem: 1G
+  max_file: 10G
+}
+
+tls {
+  cert_file: "{{CERT_PATH}}/bridge-cert.pem"
+  key_file: "{{CERT_PATH}}/bridge-key.pem"
+  ca_file: "{{CERT_PATH}}/ca-cert.pem"
+  verify: true
+  timeout: 2
+}
+
+authorization {
+  timeout: 20
+}

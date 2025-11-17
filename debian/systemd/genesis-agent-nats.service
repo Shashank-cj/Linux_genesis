@@ -1,0 +1,21 @@
+[Unit]
+Description=Genesis Agent NATS Server
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=genagent
+Group=genagent
+WorkingDirectory=/var/lib/genesis_agent/nats
+Environment=LD_LIBRARY_PATH=/usr/share/genesis_agent/python310/lib:/usr/share/genesis_agent/python310/cpython-3.10.14-linux-x86_64-gnu/lib:/opt/genesis_agent/venv/lib:/usr/local/lib
+Environment="PATH=/usr/share/genesis_agent/python310/bin:/opt/genesis_agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment=GENESIS_AGENT_NATS_CREDS=/var/lib/genesis_agent/nats/nsc_creds/BridgeUser.creds
+ExecStart=/usr/local/bin/nats-server --config /var/lib/genesis_agent/nats/nats-server.conf
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

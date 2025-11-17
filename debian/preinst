@@ -1,0 +1,38 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    install|upgrade)
+
+        if [ -f "debian/rules" ]; then
+            chmod 755 debian/rules || true
+        fi
+
+        if [ -f "debian/postinst" ]; then
+            chmod 755 debian/postinst || true
+        fi
+
+        # Create system user and group
+        if ! getent group genagent >/dev/null 2>&1; then
+            addgroup --system genagent
+        fi
+        
+        if ! getent passwd genagent >/dev/null 2>&1; then
+            adduser --system --ingroup genagent --home /var/lib/genesis_agent \
+                --no-create-home --gecos "Genesis Agent Monitoring System" genagent
+        fi
+        
+        # Create directories
+        mkdir -p /var/lib/genesis_agent
+        mkdir -p /var/log/genesis_agent
+        mkdir -p /etc/genesis_agent
+        
+        # Set permissions
+        chown genagent:genagent /var/lib/genesis_agent
+        chown genagent:genagent /var/log/genesis_agent
+        chmod 755 /var/lib/genesis_agent
+        chmod 755 /var/log/genesis_agent
+        ;;
+esac
+
+exit 0

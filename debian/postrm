@@ -1,0 +1,58 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    purge)
+        echo "[+] Purging Genesis Agent configuration and data..."
+
+        # Remove sudoers file
+        rm -f /etc/sudoers.d/genagent
+
+        # Remove configuration file
+        if [ -f /etc/genesis_agent/config.env ]; then
+            rm -f /etc/genesis_agent/config.env
+            echo "[✓] Removed /etc/genesis_agent/config.env"
+        fi
+
+        # Remove configuration directory (if empty)
+        if [ -d /etc/genesis_agent ]; then
+            rmdir /etc/genesis_agent 2>/dev/null || true
+        fi
+
+        # Ask before removing data
+        echo -n "Do you want to remove all Genesis Agent data (database, logs, etc.)? [y/N] "
+        read -r response
+
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            rm -rf /var/lib/genesis_agent/nats
+            rm -rf /var/lib/genesis_agent
+            rm -rf /var/log/genesis_agent
+            echo "[✓] All Genesis Agent data removed."
+        else
+            echo "[i] Preserving /var/lib/genesis_agent and /var/log/genesis_agent"
+        fi
+
+        # Remove system user and group
+        if getent passwd genagent > /dev/null 2>&1; then
+            deluser genagent 2>/dev/null || true
+        fi
+
+        if getent group genagent > /dev/null 2>&1; then
+            delgroup genagent 2>/dev/null || true
+        fi
+
+        # Remove any leftover package files
+        rm -f /usr/share/genesis_agent/python-agent-scripts.tar.gz
+        if [ -d /usr/share/genesis_agent/python310 ]; then
+            echo "[+] Cleaning up embedded Python runtime..."
+            rm -rf /usr/share/genesis_agent/python310
+        fi
+
+
+        rmdir /usr/share/genesis_agent 2>/dev/null || true
+
+        echo "[✓] Genesis Agent completely purged from system."
+        ;;
+esac
+
+exit 0

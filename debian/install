@@ -1,0 +1,19 @@
+target/release/models_database usr/bin/
+target/release/agent_bridge usr/bin/
+target/release/agent_collector usr/bin/
+scripts/genesis-agent usr/bin/
+scripts/genesis-agent-ui usr/bin/
+
+debian/systemd/genesis-agent-nats.service etc/systemd/system/
+debian/systemd/genesis-agent-bridge.service etc/systemd/system/
+debian/systemd/genesis-agent-collector.service etc/systemd/system/
+
+debian/usr/share/genesis_agent/python-agent-scripts.tar.gz usr/share/genesis_agent/
+debian/usr/share/genesis_agent/requirements.txt usr/share/genesis_agent/
+debian/usr/share/genesis_agent/python310/* usr/share/genesis_agent/python310/
+debian/nats.conf.template usr/share/genesis_agent/
+debian/usr/share/genesis_agent/configure-server.sh usr/share/genesis_agent/
+
+
+
+

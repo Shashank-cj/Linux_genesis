@@ -1,0 +1,32 @@
+[Unit]
+Description=Genesis Agent Collector
+After=network.target genesis-agent-nats.service genesis-agent-bridge.service
+Wants=network.target
+Requires=genesis-agent-nats.service genesis-agent-bridge.service
+
+[Service]
+Type=simple
+User=genagent
+Group=genagent
+WorkingDirectory=/var/lib/genesis_agent
+EnvironmentFile=/etc/genesis_agent/config.env
+EnvironmentFile=/etc/genesis_agent/secure.env
+Environment=LD_LIBRARY_PATH=/usr/share/genesis_agent/python310/lib:/usr/share/genesis_agent/python310/cpython-3.10.14-linux-x86_64-gnu/lib:/opt/genesis_agent/venv/lib:/usr/local/lib
+Environment="PATH=/usr/share/genesis_agent/python310/bin:/opt/genesis_agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="TLS_CERT_PATH=/var/lib/genesis_agent/nats/nats_config/certificate/collector-cert.pem"
+Environment="TLS_KEY_PATH=/var/lib/genesis_agent/nats/nats_config/certificate/collector-key.pem"
+Environment="TLS_CA_PATH=/var/lib/genesis_agent/nats/nats_config/certificate/ca.crt.pem"
+Environment="CREDS_PATH=/var/lib/genesis_agent/nats/nsc_creds/CollectorUser.creds"
+ExecStart=/usr/bin/agent_collector \
+  --nats-url nats://127.0.0.1:4222 \
+  --tls-cert /var/lib/genesis_agent/nats/nats_config/certificate/collector-cert.pem \
+  --tls-key /var/lib/genesis_agent/nats/nats_config/certificate/collector-key.pem \
+  --tls-ca /var/lib/genesis_agent/nats/nats_config/certificate/ca-cert.pem \
+  --creds /var/lib/genesis_agent/nats/nsc_creds/CollectorUser.creds
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

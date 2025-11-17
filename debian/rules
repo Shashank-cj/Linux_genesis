@@ -1,0 +1,81 @@
+#!/usr/bin/make -f
+# Debian rules file for genesis-agent — replaces build-package.sh
+
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+export DEB_CARGO_TARGET_DIR = target
+
+%:
+	dh $@ --buildsystem=none --without=shlibdeps,dwz,autoreconf,strip
+
+override_dh_auto_build:
+	@echo "🚀 Building Genesis Agent package..."
+	@set -e
+
+	# Step 1: Prepare directories
+	mkdir -p debian/usr/bin
+	mkdir -p debian/usr/share/genesis_agent
+
+	# Step 2: Create Python agent scripts tarball
+	if [ -d "agent_collector" ]; then \
+		echo "[+] Creating Python agent scripts tarball..."; \
+		cd agent_collector; \
+		tar czf ../debian/usr/share/genesis_agent/python-agent-scripts.tar.gz *.py 2>/dev/null || true; \
+		cd ..; \
+		echo "[✓] Python agent scripts tarball created."; \
+	else \
+		echo "[⚠] Python scripts not found, skipping..."; \
+	fi
+
+	# Step 3: Ensure uv (Python manager) installed
+	if ! command -v uv >/dev/null 2>&1; then \
+		echo "[+] Installing uv (Astral Python manager)..."; \
+		curl -LsSf https://astral.sh/uv/install.sh | sh; \
+	fi; \
+	export PATH="$$HOME/.local/bin:/usr/local/bin:/usr/bin:$$PATH"; \
+	echo "[+] Checking uv version..."; \
+	uv --version || (echo "[x] ERROR: uv installation failed."; exit 1);
+
+
+	# Step 4: Ensure Python 3.10 runtime available
+	if ! uv python list | grep -q "3\\.10"; then \
+		echo "[+] Downloading Python 3.10 runtime via uv..."; \
+		uv python install 3.10; \
+	else \
+		echo "[✓] Python 3.10 already in uv cache."; \
+	fi
+
+	# Step 5: Locate runtime path safely
+	PY_SRC_DIR="$$(uv python dir 3.10 2>/dev/null || true)"; \
+	if [ -z "$$PY_SRC_DIR" ] || [ ! -d "$$PY_SRC_DIR" ]; then \
+		PY_SRC_DIR="$$(find $$HOME/.local/share/uv/python -maxdepth 2 -type d -name 'cpython-3.10.*-linux-x86_64-gnu' | head -n1)"; \
+	fi; \
+	if [ -z "$$PY_SRC_DIR" ] || [ ! -d "$$PY_SRC_DIR" ]; then \
+		echo "[x] ERROR: Could not find Python 3.10 runtime. Aborting build."; \
+		exit 1; \
+	fi; \
+	echo "[+] Using Python runtime: $$PY_SRC_DIR"; \
+	mkdir -p debian/usr/share/genesis_agent/python310; \
+	rsync -a --exclude="/dev/*" --exclude="/proc/*" --exclude="/sys/*" \
+		--exclude="/boot/*" --exclude="/etc/*" \
+		"$$PY_SRC_DIR/" debian/usr/share/genesis_agent/python310/; \
+	echo "[✓] Embedded Python 3.10 copied successfully."
+
+	# Step 6: Build Rust workspace
+	echo "[+] Building Rust binaries..."; \
+	cargo build --workspace --release; \
+	echo "[✓] Rust build complete."
+
+override_dh_auto_install:
+	@echo "📦 Installing Genesis Agent files..."
+	dh_install
+
+override_dh_fixperms:
+	@echo "🔧 Setting proper file permissions..."
+	chmod +x debian/preinst debian/postinst debian/prerm debian/postrm || true
+	chmod +x scripts/genesis-agent || true
+	dh_fixperms
+
+
+override_dh_shlibdeps:
+	@echo "Skipping shared library dependency checks (custom SQLCipher handled in postinst)"
+	@true
