@@ -8,7 +8,7 @@ import re
 import threading
 from datetime import datetime
 from collections import defaultdict
-from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.orm import sessionmaker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -23,18 +23,27 @@ TABLE_UUID_MAP = {
 }
 
 class MonitoringLinux:
-    def __init__(self, db_path = os.environ.get('GENESIS_AGENT_DB_PATH', '/var/lib/genesis_agent/monitoring.db')):
+    def __init__(self, db_path=os.environ.get("GENESIS_AGENT_DB_PATH","/var/lib/genesis_agent/monitoring.db" )):
         self.db_path = os.path.abspath(db_path)
-        self.engine = create_engine(f"sqlite:///{self.db_path}")
+        db_key = os.environ.get("GENESIS_AGENT_DB_KEY")
+        if not db_key:
+            raise RuntimeError("GENESIS_AGENT_DB_KEY is not set")
+
+        self.engine = create_engine(f"sqlite+pysqlcipher://:{db_key}@/{self.db_path}",echo=False,)
+
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA cipher_compatibility = 4"))
+            conn.execute(text(f"PRAGMA key = '{db_key}'"))
+            conn.execute(text("SELECT count(*) FROM sqlite_master"))
+
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
+
         self.metadata = MetaData()
         try:
             self.metadata.reflect(bind=self.engine)
         except Exception as e:
             logging.warning("Could not reflect DB metadata: %s", e)
-
-        # File-mod tracking
         try:
             self.last_mod_time = os.path.getmtime(self.db_path)
         except Exception:

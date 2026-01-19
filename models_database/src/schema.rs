@@ -2,7 +2,7 @@
 
 diesel::table! {
     agent (uuid) {
-        uuid -> Nullable<Text>,
+        uuid -> Text,
         os -> Text,
         hostname -> Text,
         os_version -> Text,
@@ -39,6 +39,7 @@ diesel::table! {
         model -> Text,
         serial_number -> Text,
         dev_phy_vm -> Text,
+        reboot_time -> Nullable<Text>,
     }
 }
 
@@ -147,6 +148,15 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    secrets (key) {
+        key -> Text,
+        value -> Binary,
+    }
+}
+
+
+
 diesel::joinable!(cpu -> device (device_uuid));
 diesel::joinable!(gpu -> device (device_uuid));
 diesel::joinable!(ip_address -> port (port_uuid));
@@ -169,4 +179,5 @@ diesel::allow_tables_to_appear_in_same_query!(
     port,
     storage,
     tokens,
+    secrets,
 );

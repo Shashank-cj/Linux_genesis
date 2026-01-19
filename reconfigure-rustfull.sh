@@ -9,7 +9,7 @@ echo "Reconfiguring genesis_agent..."
 echo ""
 
 # Run configuration script
-/usr/share/genesis_agent/configure-server.sh
+/opt/genesis_agent/configure-server.sh
 
 # Restart services to apply new config
 echo ""

@@ -1,30 +1,40 @@
 [Unit]
 Description=Genesis Agent Collector
-After=network.target genesis-agent-nats.service genesis-agent-bridge.service
-Wants=network.target
-Requires=genesis-agent-nats.service genesis-agent-bridge.service
+After=network.target genesis-agent-secrets.service genesis-agent-nats.service 
+Requires=genesis-agent-secrets.service genesis-agent-nats.service 
 
 [Service]
 Type=simple
 User=genagent
 Group=genagent
 WorkingDirectory=/var/lib/genesis_agent
+
 EnvironmentFile=/etc/genesis_agent/config.env
-EnvironmentFile=/etc/genesis_agent/secure.env
-Environment=LD_LIBRARY_PATH=/usr/share/genesis_agent/python310/lib:/usr/share/genesis_agent/python310/cpython-3.10.14-linux-x86_64-gnu/lib:/opt/genesis_agent/venv/lib:/usr/local/lib
-Environment="PATH=/usr/share/genesis_agent/python310/bin:/opt/genesis_agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="TLS_CERT_PATH=/var/lib/genesis_agent/nats/nats_config/certificate/collector-cert.pem"
-Environment="TLS_KEY_PATH=/var/lib/genesis_agent/nats/nats_config/certificate/collector-key.pem"
-Environment="TLS_CA_PATH=/var/lib/genesis_agent/nats/nats_config/certificate/ca.crt.pem"
-Environment="CREDS_PATH=/var/lib/genesis_agent/nats/nsc_creds/CollectorUser.creds"
-ExecStart=/usr/bin/agent_collector \
+Environment=GENESIS_AGENT_SECRETS_DIR=/run/genesis_agent/secrets
+
+# ---- NATS runtime (RAM-based secrets) ----
+Environment=NATS_URL=nats://127.0.0.1:4222
+Environment=NATS_CREDS=/run/genesis_agent/secrets/collector.creds
+Environment=NATS_TLS_CERT=/run/genesis_agent/secrets/collector-cert.pem
+Environment=NATS_TLS_KEY=/run/genesis_agent/secrets/collector-key.pem
+Environment=NATS_TLS_CA=/run/genesis_agent/secrets/ca-cert.pem
+
+# ---- Runtime libs ----
+Environment=LD_LIBRARY_PATH=/opt/genesis_agent/python310/lib:/opt/genesis_agent/venv/lib:/usr/local/lib
+Environment=PATH=/opt/genesis_agent/python310/bin:/opt/genesis_agent/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+ExecStart=/bin/bash -c "/opt/genesis_agent/bin/agent_collector \
   --nats-url nats://127.0.0.1:4222 \
-  --tls-cert /var/lib/genesis_agent/nats/nats_config/certificate/collector-cert.pem \
-  --tls-key /var/lib/genesis_agent/nats/nats_config/certificate/collector-key.pem \
-  --tls-ca /var/lib/genesis_agent/nats/nats_config/certificate/ca-cert.pem \
-  --creds /var/lib/genesis_agent/nats/nsc_creds/CollectorUser.creds
+  --creds /run/genesis_agent/secrets/collector.creds \
+  --tls-cert /run/genesis_agent/secrets/collector-cert.pem \
+  --tls-key /run/genesis_agent/secrets/collector-key.pem \
+  --tls-ca /run/genesis_agent/secrets/ca-cert.pem \
+  2>&1 | tee -a /var/log/genesis_agent/collector.log"
+
+
 Restart=always
 RestartSec=10
+
 StandardOutput=journal
 StandardError=journal
 

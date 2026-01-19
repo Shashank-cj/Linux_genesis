@@ -7,9 +7,10 @@ use serde_json::Value;
 use base64::engine::general_purpose;
 use base64::Engine;
 use shared_config::CONFIG;
+use anyhow::anyhow;
 
 use models_database::db::{
-    establish_connection, get_agent_credential, initial_data_save, is_agent_onboarded, save_agent ,update_initial_data
+     get_agent_credential, initial_data_save, is_agent_onboarded, save_agent ,update_initial_data
 };
 use tokio_tungstenite::{connect_async_tls_with_config, Connector, WebSocketStream};
 use tokio_tungstenite::tungstenite::protocol::Message;
@@ -49,7 +50,8 @@ struct MasterKeyPayload {
 /// Submits the master key to the server for onboarding
 pub async fn send_master_key_to_server(received_payload: &str) -> Result<(), Box<dyn std::error::Error>> {
     
-    let mut conn = establish_connection(&CONFIG.db_path);
+    let mut conn = models_database::establish_encrypted_connection();
+
 
     if is_agent_onboarded(&mut conn) {
         println!("[INFO] Agent is already onboarded. Skipping server call.");
@@ -60,6 +62,7 @@ pub async fn send_master_key_to_server(received_payload: &str) -> Result<(), Box
     let payload: MasterKeyPayload = serde_json::from_str(received_payload)?;
 
     let api_key = "1234567890abcdef1234567890abcdef";
+   
 
     let central_server_url = base_url().to_string() + "/api/agent/onboard/";
 
@@ -97,7 +100,7 @@ pub async fn send_master_key_to_server(received_payload: &str) -> Result<(), Box
 
 /// Retrieves a new access token using saved client credentials
 pub async fn get_new_access_token(token_type: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let mut conn = establish_connection(&CONFIG.db_path);
+   let mut conn = models_database::establish_encrypted_connection();
 
     let credential = match get_agent_credential(&mut conn) {
         Some(cred) => cred,
@@ -130,7 +133,7 @@ pub async fn get_new_access_token(token_type: &str) -> Result<String, Box<dyn st
 
     let status = response.status();
     let body = response.text().await?;
-
+ 
     if status.is_success() {
         info!("Successfully fetched access token.");
         Ok(body)
@@ -139,9 +142,9 @@ pub async fn get_new_access_token(token_type: &str) -> Result<String, Box<dyn st
         Err(format!("Token error: {status}").into())
     }
 }
+pub async fn send_to_server(data: &str,token: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut conn = models_database::establish_encrypted_connection();
 
-pub async fn send_to_server(data: &str, token: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let mut conn = establish_connection(&CONFIG.db_path);
     let url = format!("{}/api/agent/init/data/", base_url());
     let agent_uuid = match get_agent_credential(&mut conn) {
         Some(cred) => cred.uuid,
@@ -172,10 +175,15 @@ pub async fn send_to_server(data: &str, token: &str) -> Result<String, Box<dyn s
         info!("Response from server: {}", response_text);
         let json_data: Value = serde_json::from_str(&response_text)?;
         match initial_data_save(&mut conn, &json_data) {
-            Ok(_) => {
-                info!("Response data stored successfully");
-                return Ok("Data stored successfully".to_string());
-            }
+             Ok(_) => {
+            let message = json_data
+                .get("message")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("Server response missing 'message' field"))?;
+
+            info!("Response data stored successfully");
+            return Ok(message.to_string());
+        }
             Err(e) => eprintln!("Error storing data: {:?}", e),
         }
     } else {
@@ -190,7 +198,8 @@ pub async fn send_to_server(data: &str, token: &str) -> Result<String, Box<dyn s
 
 
 pub async fn send_to_monitor_server(data: &str, access_token: &str) -> Result<String, String> {
-    let mut conn = establish_connection(&CONFIG.db_path);
+   let mut conn = models_database::establish_encrypted_connection();
+
 
     let agent_uuid = match get_agent_credential(&mut conn) {
         Some(cred) => cred.uuid,
@@ -312,7 +321,8 @@ async fn web_socket_connection(access_token: &str, agent_uuid: &str) -> Result<W
 }
 
 pub async fn scan_data_to_server(data: &Value, uuid: &str,action :&str) -> Result<(), Box<dyn std::error::Error>> {
-    let mut conn = establish_connection(&CONFIG.db_path);
+   let mut conn = models_database::establish_encrypted_connection();
+
     let action = if action == "partition" { "disk" } else { action };
     let url = format!("{}/api/agent/init/data/{}/{}/", base_url(),uuid,action);
     let client = reqwest::Client::builder()
@@ -343,5 +353,6 @@ pub async fn scan_data_to_server(data: &Value, uuid: &str,action :&str) -> Resul
     } else {
         println!("[ERROR] Failed to send data to server. Status: {}", response.status());
     }
+
     Ok(())
 }

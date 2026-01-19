@@ -5,24 +5,37 @@ import json
 from datetime import datetime
 import os
 import re
-from sqlalchemy import create_engine, MetaData, Table
+from sqlalchemy import create_engine, MetaData, Table, text
 from sqlalchemy.orm import sessionmaker
 import logging
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class AgentData:
+ 
     def __init__(self):
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        self.db_path = os.environ.get("GENESIS_AGENT_DB_PATH","/var/lib/genesis_agent/monitoring.db")
+        db_key = os.environ.get("GENESIS_AGENT_DB_KEY")
+        if not db_key:
+            raise RuntimeError("GENESIS_AGENT_DB_KEY is not set")
+
+        self.engine = create_engine(f"sqlite+pysqlcipher://:{db_key}@/{self.db_path}",echo=False,)
         
-        # NEW: Add database integration like Windows code
-        db_path = os.environ.get('GENESIS_AGENT_DB_PATH', '/var/lib/genesis_agent/monitoring.db')
-        self.engine = create_engine(f"sqlite:///{db_path}")
+        with self.engine.connect() as conn:
+            conn.execute(text("PRAGMA cipher_compatibility = 4;"))
+            conn.execute(text(f"PRAGMA key = '{db_key}'"))
+            conn.execute(text("SELECT count(*) FROM sqlite_master;"))
+
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
+
         self.metadata = MetaData()
-        self.metadata.reflect(bind=self.engine)
-        self.db_path = db_path
+        try:
+            self.metadata.reflect(bind=self.engine)
+        except Exception as e:
+            logging.warning("Could not reflect DB metadata: %s", e)
 
     # NEW: Add UUID lookup function like Windows code
     def get_uuid_by_name(self, table_name, name_field, name_value):
@@ -112,14 +125,16 @@ class AgentData:
                 "make": make,
                 "model": model,
                 "serial_number": self.run_cmd(["sudo", "dmidecode", "-s", "system-uuid"]).strip(),
-                "dev_phy_vm": dev_type
+                "dev_phy_vm": dev_type,
+                "reboot_time":None
             }
         except:
             return {
                 "make": "Unknown",
                 "model": "Unknown",
                 "serial_number": "Unknown",
-                "dev_phy_vm": "Unknown"
+                "dev_phy_vm": "Unknown",
+                "reboot_time":"Unknown"
             }
 
     def get_cpu_info(self):
@@ -234,11 +249,21 @@ class AgentData:
             return "Unknown"
 
     def get_storage_info(self, action=None):
-        lsblk = self.run_cmd(["lsblk", "-b", "-J", "-o", "NAME,SIZE,MODEL,SERIAL,FSTYPE,MOUNTPOINT,FSAVAIL,FSUSED,FSSIZE,UUID"])
+        lsblk = self.run_cmd(["lsblk", "-b", "-J", "-o", "NAME,TYPE,SIZE,MODEL,SERIAL,FSTYPE,MOUNTPOINT,FSAVAIL,FSUSED,FSSIZE,UUID"])
         blk_data = json.loads(lsblk)
         storage = []
         
         for device in blk_data['blockdevices']:
+            if device.get("type") != "disk":
+                 continue
+
+            has_partitions = bool(device.get("children"))
+            has_fs = bool(device.get("fstype"))
+            has_mount = bool(device.get("mountpoint"))
+
+            if not (has_partitions or has_fs or has_mount):
+                continue
+                    
             if not device.get('mountpoint'):
                 device_name = device["name"]
                 device_path = f"/dev/{device_name}"
@@ -388,7 +413,7 @@ class AgentData:
                     nic["max_speed"] = self.convert_size_to_bytes(speed_str)
             
             if "max_speed" not in nic:
-                nic["max_speed"] = 10000000000  # 10Gbps in bps
+                nic["max_speed"] = 10000000000  
             
             interface_name = port.get("interface_name", "")
             nic["os_uuid"] = self.get_nic_system_uuid(interface_name)
@@ -468,6 +493,87 @@ class AgentData:
         except Exception as e:
             logging.error(f"Error in scan_particular_action: {e}")
             return {}
+    
+    
+    def inject_uuids(self, payload):
+        if "device" not in payload:
+            return payload
+
+        device = payload["device"]
+
+        serial = device.get("serial_number")
+        if serial and serial != "Unknown":
+            device["uuid"] = self.get_uuid_by_name("device", "serial_number", serial)
+        else:
+            device["uuid"] = "unknown"
+
+        for cpu in device.get("cpu", []):
+            os_uuid = cpu.get("os_uuid")
+            if os_uuid:
+                cpu["uuid"] = self.get_uuid_by_name("cpu", "os_uuid", os_uuid)
+            else:
+                cpu["uuid"] = "unknown"
+
+        for mem in device.get("memory", []):
+            os_uuid = mem.get("os_uuid")
+            if os_uuid and os_uuid != "Not Specified":
+                mem["uuid"] = self.get_uuid_by_name("memory", "os_uuid", os_uuid)
+            else:
+                mem["uuid"] = "unknown"
+
+        for disk in device.get("storage", []):
+            os_uuid = disk.get("os_uuid")
+            serial = disk.get("serial_number", "")
+
+            if os_uuid and os_uuid != "Unknown":
+                disk["uuid"] = self.get_uuid_by_name("storage", "os_uuid", os_uuid)
+            elif serial and serial != "not specified":
+                disk["uuid"] = self.get_uuid_by_name("storage", "serial_number", serial)
+            else:
+                disk["uuid"] = "unknown"
+
+            for part in disk.get("partition", []):
+                part_os_uuid = part.get("os_uuid")
+                part_serial = part.get("serial_number")
+
+                if part_os_uuid and part_os_uuid != "Unknown":
+                    part["uuid"] = self.get_uuid_by_name("partition", "os_uuid", part_os_uuid)
+                elif part_serial and part_serial != "Unknown":
+                    part["uuid"] = self.get_uuid_by_name("partition", "serial_number", part_serial)
+                else:
+                    part["uuid"] = "unknown"
+
+        for nic in device.get("nic", []):
+            os_uuid = nic.get("os_uuid")
+            if os_uuid:
+                nic["uuid"] = self.get_uuid_by_name("nic", "os_uuid", os_uuid)
+            else:
+                nic["uuid"] = "unknown"
+
+            for port in nic.get("port", []):
+                iface = port.get("interface_name")
+                if iface:
+                    port["uuid"] = self.get_uuid_by_name("port", "interface_name", iface)
+                else:
+                    port["uuid"] = "unknown"
+                
+                for ip in port.get("ip"):
+                    address=ip.get("address")
+                    if address:
+                        ip["uuid"] = self.get_uuid_by_name("ip_address", "address", address)
+                    else:
+                        ip["uuid"] = "unknown"
+                                 
+
+        for gpu in device.get("gpu", []):
+            serial = gpu.get("serial_number")
+            if serial:
+                gpu["uuid"] = self.get_uuid_by_name("gpu", "serial_number", serial)
+            else:
+                gpu["uuid"] = "unknown"
+
+        return payload
+
 
  
     def collect_data(self):
@@ -485,7 +591,42 @@ class AgentData:
             },
         }
 
+    def get_reboot_time_if_valid(self):
+        try:
+            # install time from env (written during install)
+            install_str = os.environ.get("GENESIS_AGENT_INSTALL_TIME")
+            if not install_str:
+                return None
+
+            install_time = datetime.fromisoformat(install_str.replace("Z", "+00:00"))
+
+            # system boot time
+            with open("/proc/stat", "r") as f:
+                for line in f:
+                    if line.startswith("btime"):
+                        boot_ts = int(line.split()[1])
+                        reboot_time = datetime.fromtimestamp(boot_ts, tz=timezone.utc)
+
+                        # ONLY if OS rebooted after install
+                        if reboot_time > install_time:
+                            return reboot_time.strftime("%Y-%m-%d %H:%M:%S")
+
+                        return None
+        except Exception:
+            return None
+
+        return None
+        
+    def reScan(self):
+        logging.info("[RESCAN] Collecting data for update")
+
+        data = self.collect_data()
+        data = self.inject_uuids(data)
+
+        # Send reboot_time ONLY if OS reboot happened after install
+        data["device"]["reboot_time"] = self.get_reboot_time_if_valid()
+
+        return data
+
 if __name__ == "__main__":
     agent_data = AgentData()
-    data = agent_data.collect_data()
-    print(json.dumps(data, indent=4))

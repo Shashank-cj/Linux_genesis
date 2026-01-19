@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # Genesis Agent UI Launcher
-exec /usr/bin/genesis-agent-ui"$@"
+exec /usr/bin/genesis-agent-ui "$@"

@@ -1,19 +1,31 @@
-target/release/models_database usr/bin/
-target/release/agent_bridge usr/bin/
-target/release/agent_collector usr/bin/
-scripts/genesis-agent usr/bin/
-scripts/genesis-agent-ui usr/bin/
+# Rust binaries
+target/release/models_database        opt/genesis_agent/bin/
+target/release/agent_bridge           opt/genesis_agent/bin/
+target/release/agent_collector        opt/genesis_agent/bin/
+target/release/runtime_init           opt/genesis_agent/bin/
+ 
 
-debian/systemd/genesis-agent-nats.service etc/systemd/system/
-debian/systemd/genesis-agent-bridge.service etc/systemd/system/
-debian/systemd/genesis-agent-collector.service etc/systemd/system/
+# Shell scripts
+scripts/genesis-agent                 usr/bin/
+scripts/genesis-agent-ui              usr/bin/
 
-debian/usr/share/genesis_agent/python-agent-scripts.tar.gz usr/share/genesis_agent/
-debian/usr/share/genesis_agent/requirements.txt usr/share/genesis_agent/
-debian/usr/share/genesis_agent/python310/* usr/share/genesis_agent/python310/
-debian/nats.conf.template usr/share/genesis_agent/
-debian/usr/share/genesis_agent/configure-server.sh usr/share/genesis_agent/
+# Systemd services
+debian/systemd/genesis-agent-nats.service       lib/systemd/system/
+debian/systemd/genesis-agent-bridge.service     lib/systemd/system/
+debian/systemd/genesis-agent-collector.service  lib/systemd/system/
+debian/systemd/genesis-agent-secrets.service    lib/systemd/system/   
 
+# Log rotation
+debian/genesis-agent.logrotate                  etc/logrotate.d/genesis-agent
 
-
+# Python packaged runtime + resources
+debian/opt/genesis_agent/python-agent-scripts.tar.gz    opt/genesis_agent/
+debian/opt/genesis_agent/python310/*                    opt/genesis_agent/python310/
+debian/opt/genesis_agent/vendor/nats-server-v2.10.14-linux-amd64.tar.gz  opt/genesis_agent/vendor/
+debian/opt/genesis_agent/vendor/nsc-linux-amd64.zip     opt/genesis_agent/vendor/
+debian/opt/genesis_agent/vendor/sqlcipher-4.5.0.tar.gz  opt/genesis_agent/vendor/
+scripts/requirements.txt                                opt/genesis_agent/
+scripts/nats.conf.template                              opt/genesis_agent/
+scripts/configure-server.sh                             opt/genesis_agent/
+scripts/nats-runtime-config.sh                          opt/genesis_agent/
 

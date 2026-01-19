@@ -41,17 +41,21 @@ case "$1" in
             delgroup genagent 2>/dev/null || true
         fi
 
-        # Remove any leftover package files
-        rm -f /usr/share/genesis_agent/python-agent-scripts.tar.gz
-        if [ -d /usr/share/genesis_agent/python310 ]; then
-            echo "[+] Cleaning up embedded Python runtime..."
-            rm -rf /usr/share/genesis_agent/python310
-        fi
+        # Remove entire installation directory
+        rm -rf /opt/genesis_agent
+        rm -rf /run/genesis_agent
+        rm -f /usr/local/bin/nats-server
+        rm -f /usr/local/bin/nsc
 
+        # Remove systemd services
+        rm -f /lib/systemd/system/genesis-agent-nats.service
+        rm -f /lib/systemd/system/genesis-agent-bridge.service
+        rm -f /lib/systemd/system/genesis-agent-collector.service
 
-        rmdir /usr/share/genesis_agent 2>/dev/null || true
+        # Reload systemd to clear units
+        systemctl daemon-reload >/dev/null 2>&1 || true
 
-        echo "[✓] Genesis Agent completely purged from system."
+        echo "[✓] All application binaries and resources removed from /opt/genesis_agent."
         ;;
 esac
 

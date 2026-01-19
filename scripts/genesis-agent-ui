@@ -141,7 +141,7 @@ service_management() {
     echo -n "Choose option [0-6]: "
     
     read mgmt_choice
-    
+     
     case $mgmt_choice in
         1)
             echo ""
@@ -236,7 +236,7 @@ show_configuration() {
             1)
                 echo ""
                 echo -e "${CYAN}Reconfiguring server...${NC}"
-                sudo /usr/share/genesis_agent/configure-server.sh
+                sudo /opt/genesis_agent/configure-server.sh
                 echo ""
                 echo -e "${YELLOW}Restart services to apply changes? [y/N]:${NC}"
                 read restart_choice
@@ -255,7 +255,7 @@ show_configuration() {
     else
         echo -e "${RED}Configuration file not found!${NC}"
         echo ""
-        echo "Run: sudo /usr/share/genesis_agent/configure-server.sh"
+        echo "Run: sudo /opt/genesis_agent/configure-server.sh"
     fi
     
     echo ""
@@ -282,9 +282,9 @@ show_system_info() {
         db_size=$(du -h /var/lib/genesis_agent/monitoring.db | cut -f1)
         echo "  Size: $db_size"
         
-        agent_count=$(sudo sqlite3 /var/lib/genesis_agent/monitoring.db "SELECT COUNT(*) FROM agents;" 2>/dev/null || echo "0")
-        token_count=$(sudo sqlite3 /var/lib/genesis_agent/monitoring.db "SELECT COUNT(*) FROM tokens;" 2>/dev/null || echo "0")
-        
+        agent_count=$(sudo sqlcipher /var/lib/genesis_agent/monitoring.db "SELECT COUNT(*) FROM agents;" 2>/dev/null || echo "0")
+        token_count=$(sudo sqlcipher /var/lib/genesis_agent/monitoring.db "SELECT COUNT(*) FROM tokens;" 2>/dev/null || echo "0")
+
         echo "  Agents: $agent_count"
         echo "  Tokens: $token_count"
     else

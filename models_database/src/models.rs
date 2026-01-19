@@ -11,7 +11,7 @@ pub struct AgentCredential {
 }
 
 
-#[derive(Debug, Insertable, Deserialize)]
+#[derive(Debug, Insertable, AsChangeset, Deserialize,Queryable)]
 #[diesel(table_name = crate::schema::agent)]
 pub struct Agent {
     pub uuid: String,
@@ -20,7 +20,7 @@ pub struct Agent {
     pub os_version: String,
 }
 
-#[derive(Debug, Insertable, Deserialize)]
+#[derive(Debug, Insertable, AsChangeset, Deserialize,Queryable)]
 #[diesel(table_name = crate::schema::device)]
 pub struct Device {
     pub uuid: String,
@@ -28,9 +28,10 @@ pub struct Device {
     pub model: String,
     pub serial_number: String,
     pub dev_phy_vm: String,
+    pub reboot_time:Option<String>,
 }
 
-#[derive(Debug, Insertable, Deserialize)]
+#[derive(Debug, Insertable, AsChangeset, Deserialize,Queryable)]
 #[diesel(table_name = crate::schema::cpu)]
 pub struct Cpu {
     pub uuid: String,
@@ -44,7 +45,7 @@ pub struct Cpu {
     pub os_uuid: Option<String>,
 }
 
-#[derive(Debug, Insertable, Deserialize)]
+#[derive(Debug, Insertable, AsChangeset, Deserialize,Queryable)]
 #[diesel(table_name = crate::schema::memory)]
 pub struct Memory {
     pub uuid: String,
@@ -119,8 +120,7 @@ pub struct Port {
     pub logical_type: String,
     pub os_uuid: Option<String>,
 }
-
-#[derive(Debug, Insertable, Deserialize , Queryable)]
+#[derive(Debug, Insertable, AsChangeset, Deserialize,Queryable)]
 #[diesel(table_name = crate::schema::ip_address)]
 pub struct Ip {
     pub uuid: String,
@@ -133,7 +133,7 @@ pub struct Ip {
     pub os_uuid: Option<String>,
 }
 
-#[derive(Debug, Insertable, Deserialize)]
+#[derive(Debug, Insertable, AsChangeset, Deserialize,Queryable)]
 #[diesel(table_name = crate::schema::gpu)]
 pub struct Gpu {
     pub uuid: String,
@@ -156,5 +156,14 @@ pub struct Token {
     pub expiration: String,
     pub token_type: String,
 }
+
+#[derive(Debug, Insertable, Deserialize , Queryable)]
+#[diesel(table_name = crate::schema::secrets)]
+pub struct Secret {
+    pub key: String,
+    pub value: Vec<u8>,
+}
+
+
 
 

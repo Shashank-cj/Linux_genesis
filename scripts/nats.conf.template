@@ -22,9 +22,9 @@ tls {
   key_file: "{{CERT_PATH}}/bridge-key.pem"
   ca_file: "{{CERT_PATH}}/ca-cert.pem"
   verify: true
-  timeout: 2
+  timeout: 2  
 }
 
 authorization {
-  timeout: 20
+  timeout: 20 
 }

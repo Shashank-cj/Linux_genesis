@@ -11,15 +11,16 @@ override_dh_auto_build:
 	@echo "🚀 Building Genesis Agent package..."
 	@set -e
 
-	# Step 1: Prepare directories
-	mkdir -p debian/usr/bin
-	mkdir -p debian/usr/share/genesis_agent
+	mkdir -p debian/opt/genesis_agent
+	mkdir -p debian/opt/genesis_agent/vendor
+
+
 
 	# Step 2: Create Python agent scripts tarball
 	if [ -d "agent_collector" ]; then \
 		echo "[+] Creating Python agent scripts tarball..."; \
 		cd agent_collector; \
-		tar czf ../debian/usr/share/genesis_agent/python-agent-scripts.tar.gz *.py 2>/dev/null || true; \
+		tar czf ../debian/opt/genesis_agent/python-agent-scripts.tar.gz *.py 2>/dev/null || true; \
 		cd ..; \
 		echo "[✓] Python agent scripts tarball created."; \
 	else \
@@ -54,16 +55,40 @@ override_dh_auto_build:
 		exit 1; \
 	fi; \
 	echo "[+] Using Python runtime: $$PY_SRC_DIR"; \
-	mkdir -p debian/usr/share/genesis_agent/python310; \
+	mkdir -p debian/opt/genesis_agent/python310; \
 	rsync -a --exclude="/dev/*" --exclude="/proc/*" --exclude="/sys/*" \
 		--exclude="/boot/*" --exclude="/etc/*" \
-		"$$PY_SRC_DIR/" debian/usr/share/genesis_agent/python310/; \
+		"$$PY_SRC_DIR/"  debian/opt/genesis_agent/python310/; \
 	echo "[✓] Embedded Python 3.10 copied successfully."
 
 	# Step 6: Build Rust workspace
 	echo "[+] Building Rust binaries..."; \
 	cargo build --workspace --release; \
 	echo "[✓] Rust build complete."
+
+	# Step X: Download vendor dependencies (one-time, build machine only)
+	echo "[+] Preparing vendor dependencies..."
+
+	if [ ! -f debian/opt/genesis_agent/vendor/sqlcipher-4.5.0.tar.gz ]; then \
+		echo "  - Downloading SQLCipher 4.5.0"; \
+		curl -L https://github.com/sqlcipher/sqlcipher/archive/refs/tags/v4.5.0.tar.gz \
+		  -o debian/opt/genesis_agent/vendor/sqlcipher-4.5.0.tar.gz; \
+	fi
+
+	if [ ! -f debian/opt/genesis_agent/vendor/nats-server-v2.10.14-linux-amd64.tar.gz ]; then \
+		echo "  - Downloading NATS Server 2.10.14"; \
+		curl -L https://github.com/nats-io/nats-server/releases/download/v2.10.14/nats-server-v2.10.14-linux-amd64.tar.gz \
+		  -o debian/opt/genesis_agent/vendor/nats-server-v2.10.14-linux-amd64.tar.gz; \
+	fi
+
+	if [ ! -f debian/opt/genesis_agent/vendor/nsc-linux-amd64.zip ]; then \
+		echo "  - Downloading NSC 2.12.0"; \
+		curl -L https://github.com/nats-io/nsc/releases/download/v2.12.0/nsc-linux-amd64.zip \
+		  -o debian/opt/genesis_agent/vendor/nsc-linux-amd64.zip; \
+	fi
+
+	echo "[✓] Vendor dependencies ready."
+
 
 override_dh_auto_install:
 	@echo "📦 Installing Genesis Agent files..."

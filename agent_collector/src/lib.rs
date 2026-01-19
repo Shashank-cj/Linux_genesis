@@ -6,12 +6,7 @@ use shared_config::CONFIG;
 static AGENT_INSTANCE: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
 static MONITOR_INSTANCE: Mutex<Option<Py<PyAny>>> = Mutex::new(None);
 
-fn get_class_instance<'a>(
-    py: Python<'a>,
-    instance_mutex: &Mutex<Option<Py<PyAny>>>,
-    module_name: &str,
-    class_name: &str,
-) -> PyResult<Py<PyAny>> {
+fn get_class_instance<'a>(py: Python<'a>,instance_mutex: &Mutex<Option<Py<PyAny>>>,module_name: &str,class_name: &str,) -> PyResult<Py<PyAny>> {
     let mut lock = instance_mutex.lock().unwrap();
 
     if let Some(instance) = &*lock {
@@ -22,9 +17,8 @@ fn get_class_instance<'a>(
     let path: &PyList = sys.getattr("path")?.downcast()?;
 
     path.insert(0, format!("{}/agent_collector", CONFIG.app_dir))?;
-    path.insert(0, "/opt/genesis_agent/venv/lib/python3.10/site-packages")?;
-
-    sys.setattr("executable", "/opt/genesis_agent/venv/bin/python")?;
+    path.insert(0,format!("{}/lib/python3.10/site-packages", CONFIG.python_venv_dir),)?;
+    sys.setattr("executable",format!("{}/bin/python", CONFIG.python_venv_dir),)?;
 
     let module = py.import(module_name)?;
     let class = module.getattr(class_name)?;
@@ -68,6 +62,16 @@ pub fn agent_data() -> PyResult<String> {
     Python::with_gil(|py| {
         let instance = get_class_instance(py, &AGENT_INSTANCE, "agent_data", "AgentData")?;
         let result = call_cached_method(&instance, "get_full_info");
+        clear_instance(&AGENT_INSTANCE);
+
+        result
+    })
+}
+
+pub fn agent_rescan() -> PyResult<String> {
+    Python::with_gil(|py| {
+        let instance = get_class_instance(py, &AGENT_INSTANCE, "agent_data", "AgentData")?;
+        let result = call_cached_method(&instance, "reScan");
         clear_instance(&AGENT_INSTANCE);
 
         result

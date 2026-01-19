@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::initail_response::{insert_or_update, store_json_data,delete_action}; 
 use chrono::NaiveDateTime;
+use diesel::sql_types::Binary;
+use diesel::sql_types::Text;
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ServerResponse {
     pub uuid: String,
@@ -17,26 +20,35 @@ pub struct ServerResponse {
     pub master_key: String,
 }
 
-pub fn establish_connection(db_path: &str) -> SqliteConnection {
-    let db_dir = Path::new(db_path).parent().unwrap_or_else(|| Path::new("."));
+#[derive(QueryableByName)]
+struct SecretRow {
+    #[diesel(sql_type = Text)]
+    key: String,
 
-    // Create directory if it doesn't exist
-    if !db_dir.exists() {
-        println!("Creating directory: {:?}", db_dir);
-        fs::create_dir_all(db_dir).expect("Failed to create database directory");
-    }
-
-    // Create database file if it doesn't exist
-    if !Path::new(db_path).exists() {
-        println!("Creating database at: {}", db_path);
-        fs::File::create(db_path).expect("Failed to create database file");
-    }
-
-    // Connect to the database
-    let conn = SqliteConnection::establish(db_path)
-        .unwrap_or_else(|_| panic!("Error connecting to {}", db_path));
-    conn
+    #[diesel(sql_type = Binary)]
+    value: Vec<u8>,
 }
+
+// pub fn establish_connection(db_path: &str) -> SqliteConnection {
+//     let db_dir = Path::new(db_path).parent().unwrap_or_else(|| Path::new("."));
+
+//     // Create directory if it doesn't exist
+//     if !db_dir.exists() {
+//         println!("Creating directory: {:?}", db_dir);
+//         fs::create_dir_all(db_dir).expect("Failed to create database directory");
+//     }
+
+//     // Create database file if it doesn't exist
+//     if !Path::new(db_path).exists() {
+//         println!("Creating database at: {}", db_path);
+//         fs::File::create(db_path).expect("Failed to create database file");
+//     }
+
+//     // Connect to the database
+//     let conn = SqliteConnection::establish(db_path)
+//         .unwrap_or_else(|_| panic!("Error connecting to {}", db_path));
+//     conn
+// }
 
 // Function to save the response into the database
 pub fn save_agent(conn: &mut SqliteConnection, response: &ServerResponse) -> Result<(), diesel::result::Error> {
@@ -164,4 +176,30 @@ pub fn delete_initial_data(conn: &mut SqliteConnection, json_data: &Value) -> Re
         })
         .map(|_| println!("Data deleted successfully."))
    
+}
+
+pub fn insert_secret( conn: &mut SqliteConnection,k: &str,v: &[u8],) -> QueryResult<()> {
+    diesel::sql_query(
+        "INSERT OR REPLACE INTO secrets (key, value) VALUES (?, ?)"
+    )
+    .bind::<diesel::sql_types::Text, _>(k)
+    .bind::<diesel::sql_types::Binary, _>(v)
+    .execute(conn)?;
+    Ok(())
+}
+
+
+use std::collections::HashMap;
+
+pub fn load_all_secrets(conn: &mut SqliteConnection) -> anyhow::Result<HashMap<String, Vec<u8>>> {
+    let rows: Vec<SecretRow> =
+        diesel::sql_query("SELECT key, value FROM secrets")
+            .load(conn)?;
+
+    let mut secrets = HashMap::new();
+    for row in rows {
+        secrets.insert(row.key, row.value);
+    }
+
+    Ok(secrets)
 }

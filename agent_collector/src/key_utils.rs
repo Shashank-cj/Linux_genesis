@@ -19,7 +19,6 @@ impl KeyManager {
         let mut master_key = vec![0u8; 32];
         OsRng.fill_bytes(&mut master_key);
 
-        // Derive device-specific encryption key
         let machine_id = fs::read_to_string("/etc/machine-id").unwrap_or_else(|_| "fallback".into());
         let mut hasher = Sha256::new();
         hasher.update(machine_id.as_bytes());
@@ -27,7 +26,7 @@ impl KeyManager {
 
         let cipher = Aes256Gcm::new_from_slice(&encryption_key).unwrap();
         
-        // Generate random 12-byte nonce
+
         let mut nonce_bytes = [0u8; 12];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = aes_gcm::Nonce::from_slice(&nonce_bytes);
@@ -38,7 +37,7 @@ impl KeyManager {
         fs::create_dir_all(path.parent().unwrap()).expect("Failed to create directories");
         let mut file = File::create(&path).expect("Failed to create master key file");
         
-        // Store nonce first, then encrypted data
+    
         file.write_all(&nonce_bytes).expect("Failed to write nonce");
         file.write_all(&encrypted_master_key).expect("Failed to write master key");
 
@@ -52,11 +51,9 @@ impl KeyManager {
             let mut file = File::open(&path).expect("Failed to open master key file");
             let mut data = Vec::new();
             file.read_to_end(&mut data).expect("Failed to read master key");
-
-            // First 12 bytes are nonce, rest is encrypted data
             let (nonce_bytes, encrypted_master_key) = data.split_at(12);
 
-            // Derive same device-specific encryption key
+
             let machine_id = fs::read_to_string("/etc/machine-id").unwrap_or_else(|_| "fallback".into());
             let mut hasher = Sha256::new();
             hasher.update(machine_id.as_bytes());
